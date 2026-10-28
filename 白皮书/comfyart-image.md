@@ -61,7 +61,7 @@ flowchart TD
 节点大白话注释:
 - **冷状态:画布未打开**——浏览器里没有 ComfyArt 项目页,此时任何 MCP 画布工具都会超时。
 - **第 0 步 清理残留**——上次跑剩下的 safaridriver 进程与旧 `/tmp/safari-ctl.fifo` 不清,新控制器会把指令发进死管道;`pgrep -f safaridriver` 有输出就 kill,再删掉旧 FIFO。 <!-- issue#7 -->
-- **第 1 步 起 Safari 控制器**——一个常驻的浏览器控制服务,单会话,所有后续浏览器指令都通过它发。脚本在本仓库 `工具/safari-controller.py`。
+- **第 1 步 起 Safari 控制器**——一个常驻的浏览器控制服务,单会话,所有后续浏览器指令都通过它发。脚本在本仓库 `工具/safari-controller.py`(示例命令 `python3 工具/safari-controller.py`,须在 clone 根目录执行)。 <!-- issue#11 -->
 - **第 2 步 FIFO 发 navigate_to_url**——往控制器的命名管道写一条 JSON 指令,让 Safari 打开画布 URL。**URL 必须带 `?project=<id>` 参数直连**,不要走列表页点击。
 - **等 15-20 秒**——页面加载需要时间,别急着发下一条指令。
 - **第 3 步 验证 MCP 通道(get_canvas)**——在 Claude Code 里调 comfyart 的 `get_canvas`,**返回里带 project 与 shapes 即通**;不要依赖 `evaluate_javascript`,它在部分环境恒返回 null。 <!-- issue#3 -->
@@ -75,7 +75,7 @@ pgrep -f safaridriver && kill $(pgrep -f safaridriver)   # pgrep 有输出才 ki
 rm -f /tmp/safari-ctl.fifo                               # 删旧命名管道 <!-- issue#7 -->
 
 # 第 1 步 起 Safari 控制器(常驻单会话;脚本见本仓库 工具/safari-controller.py) <!-- issue#7 -->
-nohup python3 ~/Documents/tmp/safari-controller.py > ~/Documents/tmp/safari-controller.log 2>&1 &
+nohup python3 工具/safari-controller.py > /tmp/safari-controller.log 2>&1 &   # 须在本仓库 clone 根目录执行 <!-- issue#11 -->
 
 # 第 2 步 一条命令直达画布(带 ?project= 参数直连,不要走列表页点击!) <!-- issue#7 -->
 echo '{"id":1,"name":"navigate_to_url","args":{"url":"http://10.0.0.191:8188/comfyart/?project=61fadeda"}}' > /tmp/safari-ctl.fifo
@@ -168,7 +168,7 @@ flowchart LR
 
 ### 4.3 切换自定义流:custom_workflow assign
 
-切换自定义流不是 generate_image 的参数,而是 **`custom_workflow assign`**(换 generate 槽的生效文件)。注意:**assign 后页面需重新加载才会反映到 list_models**(reload 或重开画布)。assign 传 `file:""` 可回退到内置流。
+切换自定义流不是 generate_image 的参数,而是 **`custom_workflow assign`**(换 generate 槽的生效文件)。注意:**assign 后不要 reload 画布**,直接用 `custom:generate` 生成即生效——生成走的就是新 assign 的流,history 可核验新流;已知异常:reload 后仍可能用旧流(时序异常,2026-10-28 实测,绕行法=不reload直生成)。assign 传 `file:""` 可回退到内置流。 <!-- issue#10 -->
 
 ### 4.4 大坑:模型偏好过滤(models.json 的 auto 坑)
 
@@ -185,7 +185,7 @@ flowchart LR
 
 1. `list_models` 里根本没有自定义流 → 先查 models.json 的 auto(见 4.4);
 2. 列表里有,但 generate_image 报 unknown model → 确认传的是不是常量 `custom:generate`,而不是文件名(见 4.2);
-3. 刚 assign 完,列表 label 还是旧的 → 页面没 reload,assign 后必须 reload 画布(见 4.3);
+3. 刚 assign 完,列表 label 还是旧的 → 只是显示层滞后,不影响生成;assign 后**不要 reload** 直接用 `custom:generate` 生成即生效,history 可核验新流(reload 后仍可能用旧流,时序异常,2026-10-28 实测,绕行法=不reload直生成)(见 4.3); <!-- issue#10 -->
 4. 以上都对还失败 → 按第七章坑 5 查通道状态(画布在不在/加载完没/队列空不空)。
 
 ---
@@ -268,7 +268,7 @@ flowchart LR
    - `@save`——多末端时标记保存节点
 2. **check**:`custom_workflow action=check` 验证标记
 3. **install**:`action=install` + `name` + `feature`(generate/style/edit…),文件存 `comfyart/workflows/<feature>/`
-4. **assign**:切换当前生效文件(generate 槽就是第四章说的"模型切换器";`file:""` 回内置)
+4. **assign**:切换当前生效文件(generate 槽就是第四章说的"模型切换器";`file:""` 回内置)。assign 后**不要 reload 画布**,直接用 `custom:generate` 生成即生效,history 可核验新流 <!-- issue#10 -->
 
 ### 6.2 lora 的两个世界(lora:大白话——挂在底模上的小型微调文件,像"风格插件",不换底模也能改变画风)
 
@@ -289,9 +289,9 @@ flowchart TD
     D --> E[custom_workflow check<br/>验证标记]
     E --> F[install + name + feature=generate<br/>存 comfyart/workflows/generate/]
     F --> G[assign 该文件<br/>换 generate 槽生效流]
-    G --> H[reload 画布<br/>list_models 反映新流]
-    H --> I[generate_image<br/>model=custom:generate]
-    I --> J[MCP 两步直达出图<br/>wait_generation 等完成]
+    G --> H[不 reload 直接生成<br/>generate_image model=custom:generate 即生效]
+    H --> I[MCP 两步直达出图<br/>wait_generation 等完成]
+    I --> J[history 核验新流<br/>模型名=新 assign 的流]
     J --> K{换组合?}
     K -- 是,一组合一新文件 --> A
     K -- 否 --> L[继续用当前流]
@@ -304,7 +304,7 @@ flowchart TD
 - **@标记**——install 之前必须让 ComfyArt 认识哪些节点是提示词、宽高、底模,五要素见 6.1。
 - **check**——先验证标记合法再 install,失败在这一步暴露,比装到一半失败干净。
 - **install + feature=generate**——文件归档到 generate 槽的目录下,从此它是这个槽的候选之一。
-- **assign + reload**——把它设为当前生效流,并 reload 画布让 list_models 反映变化。
+- **assign 后不 reload**——把它设为当前生效流后**不要 reload 画布**,直接用 `custom:generate` 生成即生效,history 可核验新流;已知异常:reload 后仍可能用旧流(时序异常,2026-10-28 实测,绕行法=不reload直生成)。 <!-- issue#10 -->
 - **两步直达**——generate_image + wait_generation,实测 `image_00041` = darkBeast330 + krea2_beautiful@1.0,MCP 两步拿到结果。
 - **一组合一新文件**——这是本模式的纪律:组合变了不改节点参数,而是 assign 另一个文件,避免在流水线里手改工作流。
 
