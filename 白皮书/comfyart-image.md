@@ -25,7 +25,7 @@
 | shape id | 画布上每个元素的身份证号;改图类工具靠它指认"改哪张图" |
 | 槽 | 功能位,如 generate/style/edit/angles;每个槽有一个当前生效的流,可切换 |
 | 自定义流 | 你自己导出并 install 的 API 格式工作流,顶替某个槽的默认逻辑 |
-| 内置模型 | ComfyArt 自带的图片模型,完整 id:qwen-image-2.1-t2i.api.json / z-image-turbo-t2i.api.json / ideogram4-t2i.api.json(调用时逐字全传,禁止简写) | <!-- issue#5 --> |
+| 内置模型 | ComfyArt 自带的图片模型,完整 id:qwen-image-2.1-t2i.api.json / z-image-turbo-t2i.api.json(已弃用,不在本仓库测试范围) / ideogram4-t2i.api.json(调用时逐字全传,禁止简写) | <!-- issue#5 --> <!-- issue#14 --> |
 | lora | 挂在底模上的小型微调文件,像"风格插件",不换底模也能改变画风 |
 | assign | 把某个已 install 的工作流设为某槽当前生效的操作 |
 | API 格式工作流 | ComfyUI"工作流→导出API"得到的 JSON,自定义流的原材料 |
@@ -153,7 +153,7 @@ flowchart LR
 
 `list_models` 列出可用模型。图片模型分两类:
 
-- **内置模型**(完整 id,调用时逐字全传,禁止简写):`qwen-image-2.1-t2i.api.json` / `z-image-turbo-t2i.api.json` / `ideogram4-t2i.api.json`; <!-- issue#5 -->
+- **内置模型**(完整 id,调用时逐字全传,禁止简写):`qwen-image-2.1-t2i.api.json` / `z-image-turbo-t2i.api.json`(已弃用,不在本仓库测试范围) / `ideogram4-t2i.api.json`; <!-- issue#5 --> <!-- issue#14 -->
 - 注:ideogram4 需要 Agent 开启才能用,本仓库不覆盖。 <!-- issue#2 -->
 - **自定义流**:`custom:generate`,其 label 显示为当前 assign 的文件名。
 
@@ -353,7 +353,7 @@ flowchart TD
 | # | 功能 | 工具 | 素材状态 | 验收结果 | 产物 id / 文件名 | 实测日期 | 备注 |
 |---|---|---|---|---|---|---|---|
 | 1 | 生图(自定义流) | generate_image(model:"custom:generate") | 已实测 | | | | |
-| 2 | 生图(内置) | generate_image(model:qwen-image-2.1-t2i.api.json / z-image-turbo-t2i.api.json) | 已实测 | | | | ideogram4 已弃用不测 <!-- issue#2/#5 --> |
+| 2 | 生图(内置) | generate_image(model:qwen-image-2.1-t2i.api.json / z-image-turbo-t2i.api.json(已弃用,不在本仓库测试范围)) | 已实测 | | | | ideogram4 已弃用不测 <!-- issue#2/#5 -->;z-image-turbo 已弃用,同类场景由 qwen-image-2.1 承接 <!-- issue#14 --> |
 | 3 | 多参考合成 | generate_image(refs) | 已实测 | | | | |
 | 4 | 图生图(底图) | generate_image(base + base_strength) | 已实测 | | | | |
 | 5 | 风格迁移 | style_transfer | 已实测 | | | | |
