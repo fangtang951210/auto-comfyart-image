@@ -25,7 +25,7 @@
 | shape id | 画布上每个元素的身份证号;改图类工具靠它指认"改哪张图" |
 | 槽 | 功能位,如 generate/style/edit/angles;每个槽有一个当前生效的流,可切换 |
 | 自定义流 | 你自己导出并 install 的 API 格式工作流,顶替某个槽的默认逻辑 |
-| 内置模型 | ComfyArt 自带的图片模型(qwen-image-2.1 / z-image-turbo / ideogram4) |
+| 内置模型 | ComfyArt 自带的图片模型,完整 id:qwen-image-2.1-t2i.api.json / z-image-turbo-t2i.api.json / ideogram4-t2i.api.json(调用时逐字全传,禁止简写) | <!-- issue#5 --> |
 | lora | 挂在底模上的小型微调文件,像"风格插件",不换底模也能改变画风 |
 | assign | 把某个已 install 的工作流设为某槽当前生效的操作 |
 | API 格式工作流 | ComfyUI"工作流→导出API"得到的 JSON,自定义流的原材料 |
@@ -38,21 +38,21 @@
 
 ## 二、冷启动:激活画布
 
-冷启动指从"画布关闭的冷状态"到"MCP 可用"的完整路径,一共三步。
+冷启动指从"画布关闭的冷状态"到"MCP 可用"的完整路径,一共四步:第 0 步清理残留,第 1 步起控制器,第 2 步 navigate 直连,第 3 步用 MCP 的 get_canvas 验证通道。 <!-- issue#7 -->
 
-这张图讲什么:从零开始,起浏览器控制器、直连画布、验证 MCP 通道,直到画布激活、MCP 可用的完整冷启动路径。
+这张图讲什么:从零开始,先清理残留进程与旧管道,再起浏览器控制器、直连画布、用 get_canvas 验证 MCP 通道,直到画布激活、MCP 可用的完整冷启动路径。 <!-- issue#7 -->
 
 ```mermaid
 flowchart TD
-    A[冷状态:画布未打开] --> B[① 起 Safari 控制器<br/>常驻单会话]
-    B --> C[② FIFO 发 navigate_to_url<br/>URL 带 ?project=61fadeda 直连]
+    A[冷状态:画布未打开] --> Z[第 0 步 清理残留<br/>pgrep -f safaridriver 有则 kill<br/>删旧 /tmp/safari-ctl.fifo]
+    Z --> B[第 1 步 起 Safari 控制器<br/>常驻单会话]
+    B --> C[第 2 步 FIFO 发 navigate_to_url<br/>URL 带 ?project=61fadeda 直连]
     C --> D[等 15-20 秒页面加载]
-    D --> E[验证 canvas 元素存在<br/>evaluate_javascript 查 document.querySelector]
-    E --> F[③ 验证 MCP 通道<br/>调 server_info / list_models]
-    F --> G{有正常返回?}
+    D --> E[第 3 步 验证 MCP 通道<br/>调 get_canvas<br/>返回 project 与 shapes 即通]
+    E --> G{get_canvas 有正常返回?}
     G -- 是 --> H[画布激活,MCP 可用]
     G -- 否 --> I[排查链:<br/>控制器上下文是否失效]
-    I --> J[navigate 后 evaluate 报<br/>Could not find browsing context?]
+    I --> J[控制器报<br/>Could not find browsing context?]
     J -- 是 --> K[重启控制器,再 navigate 一次]
     K --> C
     J -- 否 --> L[按第七章踩坑实录排查]
@@ -60,32 +60,38 @@ flowchart TD
 
 节点大白话注释:
 - **冷状态:画布未打开**——浏览器里没有 ComfyArt 项目页,此时任何 MCP 画布工具都会超时。
-- **① 起 Safari 控制器**——一个常驻的浏览器控制服务,单会话,所有后续浏览器指令都通过它发。脚本在本仓库 `工具/safari-controller.py`。
-- **② FIFO 发 navigate_to_url**——往控制器的命名管道写一条 JSON 指令,让 Safari 打开画布 URL。**URL 必须带 `?project=<id>` 参数直连**,不要走列表页点击。
+- **第 0 步 清理残留**——上次跑剩下的 safaridriver 进程与旧 `/tmp/safari-ctl.fifo` 不清,新控制器会把指令发进死管道;`pgrep -f safaridriver` 有输出就 kill,再删掉旧 FIFO。 <!-- issue#7 -->
+- **第 1 步 起 Safari 控制器**——一个常驻的浏览器控制服务,单会话,所有后续浏览器指令都通过它发。脚本在本仓库 `工具/safari-controller.py`。
+- **第 2 步 FIFO 发 navigate_to_url**——往控制器的命名管道写一条 JSON 指令,让 Safari 打开画布 URL。**URL 必须带 `?project=<id>` 参数直连**,不要走列表页点击。
 - **等 15-20 秒**——页面加载需要时间,别急着发下一条指令。
-- **验证 canvas 元素存在**——确认页面真的渲染出画布了,而不是白屏或错误页。
-- **③ 验证 MCP 通道**——在 Claude Code 里调 comfyart 的 `server_info` / `list_models`,有返回即通。
+- **第 3 步 验证 MCP 通道(get_canvas)**——在 Claude Code 里调 comfyart 的 `get_canvas`,**返回里带 project 与 shapes 即通**;不要依赖 `evaluate_javascript`,它在部分环境恒返回 null。 <!-- issue#3 -->
 - **排查链**——验证失败时先怀疑控制器上下文失效(页面 reload 过),重启控制器再 navigate;还不行再查踩坑实录。
 
-三步的具体命令(实测原文):
+四步的具体命令(实测原文):
 
 ```bash
-# ① 起 Safari 控制器(常驻单会话;脚本见本仓库 工具/safari-controller.py)
+# 第 0 步 清理残留:旧 safaridriver 进程与旧 FIFO,不清则后续指令发进死管道 <!-- issue#7 -->
+pgrep -f safaridriver && kill $(pgrep -f safaridriver)   # pgrep 有输出才 kill <!-- issue#7 -->
+rm -f /tmp/safari-ctl.fifo                               # 删旧命名管道 <!-- issue#7 -->
+
+# 第 1 步 起 Safari 控制器(常驻单会话;脚本见本仓库 工具/safari-controller.py) <!-- issue#7 -->
 nohup python3 ~/Documents/tmp/safari-controller.py > ~/Documents/tmp/safari-controller.log 2>&1 &
 
-# ② 一条命令直达画布(带 ?project= 参数直连,不要走列表页点击!)
+# 第 2 步 一条命令直达画布(带 ?project= 参数直连,不要走列表页点击!) <!-- issue#7 -->
 echo '{"id":1,"name":"navigate_to_url","args":{"url":"http://10.0.0.191:8188/comfyart/?project=61fadeda"}}' > /tmp/safari-ctl.fifo
-# 等 15-20 秒页面加载;验证:evaluate_javascript 查 document.querySelector("canvas") 存在
+# 等 15-20 秒页面加载 <!-- issue#7 -->
 
-# ③ 验证 MCP 通道
-# 在 Claude Code 里调 comfyart 的 server_info / list_models,返回即通
+# 第 3 步 验证 MCP 通道:在 Claude Code 里调 comfyart 的 get_canvas,返回 project 与 shapes 即通 <!-- issue#3 -->
+# 不要用 evaluate_javascript 验证——它在部分环境恒返回 null <!-- issue#3 -->
+# 已知异常:server_info 的 project 字段在画布已激活时也可能为 null,判活一律以 get_canvas 为准 <!-- issue#4 -->
 ```
 
-三步的设计意图,先说透再动手:
+四步的设计意图,先说透再动手:
 
-- **第一步为什么是控制器**:Safari 不能被脚本直接驱动,需要这个常驻服务当"司机的脚";它是单会话的,一个控制器同一时刻只伺候一个受控页面,所以起一个就够、起了别重复起。用 `nohup` 挂后台,日志重定向到文件,控制器死了看日志。
-- **第二步为什么用 FIFO**:往管道写一行 JSON 就是发一条浏览器指令,不需要交互式终端;URL 直连的价值在于**确定性**——同一个 URL 每次落在同一个项目页面,不依赖页面元素的可点击性。
-- **第三步为什么先 server_info / list_models**:这两个是只读的轻量探针,不产生任何生成任务;它们通了,说明"AI 客户端→MCP 服务→画布标签页"整条链路是活的,后面所有功能才值得试。
+- **第 0 步为什么先清残留**:残留的 safaridriver 占着 Safari 的控制通道、旧 FIFO 的另一端早已是死进程;不清就起新控制器,指令写进管道没人收,冷启动会"看起来发了命令、其实什么都没发生"。 <!-- issue#7 -->
+- **第 1 步为什么是控制器**:Safari 不能被脚本直接驱动,需要这个常驻服务当"司机的脚";它是单会话的,一个控制器同一时刻只伺候一个受控页面,所以起一个就够、起了别重复起。用 `nohup` 挂后台,日志重定向到文件,控制器死了看日志。
+- **第 2 步为什么用 FIFO**:往管道写一行 JSON 就是发一条浏览器指令,不需要交互式终端;URL 直连的价值在于**确定性**——同一个 URL 每次落在同一个项目页面,不依赖页面元素的可点击性。
+- **第 3 步为什么用 get_canvas 而不是 evaluate_javascript / server_info**:get_canvas 是只读的轻量探针,一次调用同时带回 project 与 shapes,结构完整即说明"AI 客户端→MCP 服务→画布标签页"整条链路是活的;evaluate_javascript 在部分环境恒返回 null,不可作判活依据;server_info 的 project 字段在已激活时也可能为 null(已知异常,只标注不修)。 <!-- issue#3 --> <!-- issue#4 -->
 
 冷启动四条关键事实(每一条都是实测换来的):
 
@@ -147,7 +153,8 @@ flowchart LR
 
 `list_models` 列出可用模型。图片模型分两类:
 
-- **内置模型**:`qwen-image-2.1` / `z-image-turbo` / `ideogram4`;
+- **内置模型**(完整 id,调用时逐字全传,禁止简写):`qwen-image-2.1-t2i.api.json` / `z-image-turbo-t2i.api.json` / `ideogram4-t2i.api.json`; <!-- issue#5 -->
+- 注:ideogram4 需要 Agent 开启才能用,本仓库不覆盖。 <!-- issue#2 -->
 - **自定义流**:`custom:generate`,其 label 显示为当前 assign 的文件名。
 
 ### 4.2 自定义流的真身 id:custom:generate
@@ -194,7 +201,7 @@ flowchart LR
 - 参数:`prompt`(英文详细描述)、`ratio`(1:1/3:4/16:9…)、`count`(1-4)、`model`(custom:generate 或内置 id)、`refs`(参考图 shape id 数组,**支持多参考**)、`base` + `base_strength`(图生图底图,strength 越高变化越大)
 - 输入:纯文本提示词起步;可选参考图(shape id 数组)或底图(shape id)
 - 输出:新图 shape 落画布 + output 目录落盘;工具本身先返回任务 ids
-- 实测:custom:generate(Krea2 流)出 `image_00040`;refs 多参考(qwen 内置,5 图合成 `image_00030`)
+- 实测:custom:generate(Krea2 流)出 `image_00040`;refs 多参考(qwen-image-2.1-t2i.api.json 内置,5 图合成 `image_00030`) <!-- issue#5 -->
 - 验证方法:history 最新记录 `unet_name` 与预期一致
 
 ### 5.2 style_transfer 风格迁移(团队口语叫"图生图") ✅已实测
@@ -210,8 +217,8 @@ flowchart LR
 - 参数:`id`、`prompt`(改什么)
 - 输入:一张已有图 + 一句修改指令
 - 输出:按指令修改后的新图
-- 实测:`edit_00001`(qwen2.1,把蓝椅换绿沙发)
-- 走 edit 槽(当前无自定义流 = 内置 qwen2.1)
+- 实测:`edit_00001`(qwen-image-2.1-t2i.api.json,把蓝椅换绿沙发) <!-- issue#5 -->
+- 走 edit 槽(当前无自定义流 = 内置 qwen-image-2.1-t2i.api.json) <!-- issue#5 -->
 
 ### 5.4 expand_image 扩图 ✅已实测
 
@@ -225,7 +232,7 @@ flowchart LR
 - 参数:`id`、`horizontal`(-180..180)、`vertical`、`zoom`
 - 输入:一张已有图 + 水平角/垂直角/变焦
 - 输出:换视角重绘的新图
-- 实测:`angles_00001`(走 angles 槽,内置 qwen2.1 + camera-angles lora)
+- 实测:`angles_00001`(走 angles 槽,内置 qwen-image-2.1-t2i.api.json + camera-angles lora) <!-- issue#5 -->
 
 ### 5.6 remove_background 抠图 ✅已实测
 
@@ -243,9 +250,9 @@ flowchart LR
 - **move_object 移动物体**(未实测):`id` + object 名或坐标 + dx/dy
 - **replace_text 替换图内文字**(未实测):`id` + from + to
 - **edit_elements 图内文字转可编辑**(未实测):OCR
-- **split_layers 拆图层**(未实测):`id` + layers 数,`prompt` 可选
+- **split_layers 拆图层**(未实测):`id` + layers 数,`prompt` 可选。已知异常(只标注不修):wait_generation 返回的 shapes 为空、画布层数与落盘数可能不一致——核验以 output 目录 `layers_*.png` 文件数为准 <!-- issue#6 -->
 - **upscale_image 放大**(未实测):`id` + factor 2/4,creative 可重绘
-- **vectorize_image 转矢量 SVG**(未实测):`id`
+- **vectorize_image 转矢量 SVG**(未实测):`id`。两条实测新知识:①产物 SVG 落系统盘 `~/ComfyUI/input/comfyart/`(不是 output 目录/NAS);②当前版本 SVG 在画布上渲染为空框(上游 issue jtydhr88/ComfyArt#16 已提)——核验一律用文件路径直查落盘结果,不要看画布 <!-- 新知识 -->
 
 ---
 
@@ -346,7 +353,7 @@ flowchart TD
 | # | 功能 | 工具 | 素材状态 | 验收结果 | 产物 id / 文件名 | 实测日期 | 备注 |
 |---|---|---|---|---|---|---|---|
 | 1 | 生图(自定义流) | generate_image(model:"custom:generate") | 已实测 | | | | |
-| 2 | 生图(内置) | generate_image(model:qwen-image-2.1 / z-image-turbo / ideogram4) | 已实测 | | | | |
+| 2 | 生图(内置) | generate_image(model:qwen-image-2.1-t2i.api.json / z-image-turbo-t2i.api.json) | 已实测 | | | | ideogram4 已弃用不测 <!-- issue#2/#5 --> |
 | 3 | 多参考合成 | generate_image(refs) | 已实测 | | | | |
 | 4 | 图生图(底图) | generate_image(base + base_strength) | 已实测 | | | | |
 | 5 | 风格迁移 | style_transfer | 已实测 | | | | |
@@ -359,6 +366,6 @@ flowchart TD
 | 12 | 移动物体 | move_object | **未实测** | | | | |
 | 13 | 替换图内文字 | replace_text | **未实测** | | | | |
 | 14 | 放大 | upscale_image | **未实测** | | | | |
-| 加 | 拆图层 | split_layers | **未实测** | | | | |
+| 加 | 拆图层 | split_layers | **未实测** | | | | 已知异常:wait 返回 shapes 为空、层数可能不一致;核验以 output 目录 layers_*.png 文件数为准 <!-- issue#6 --> |
 | 加 | 文字转可编辑 | edit_elements | **未实测** | | | | |
-| 加 | 矢量化 | vectorize_image | **未实测** | | | | |
+| 加 | 矢量化 | vectorize_image | **未实测** | | | | SVG 落系统盘 ~/ComfyUI/input/comfyart/(非 output/NAS);画布渲染空框(上游 jtydhr88/ComfyArt#16);核验用路径直查 <!-- 新知识 --> |
